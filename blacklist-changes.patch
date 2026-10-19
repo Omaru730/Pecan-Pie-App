@@ -1,0 +1,953 @@
+From dc0573f12f7b115a5dac6f41f1dcb6a5421af3b2 Mon Sep 17 00:00:00 2001
+From: Giorgi <kuparadzegio10@gmail.com>
+Date: Wed, 7 Oct 2026 17:13:45 +0000
+Subject: [PATCH] feat: add OpenWrt adblock blacklist management
+
+---
+ lib/screens/blacklists_screen.dart     | 284 +++++++++++++++++++++++++
+ lib/screens/more_screen.dart           |  15 ++
+ lib/services/blacklist_repository.dart | 270 +++++++++++++++++++++++
+ lib/state/app_state.dart               |  41 ++++
+ test/blacklist_repository_test.dart    | 163 ++++++++++++++
+ test/blacklists_screen_test.dart       |  99 +++++++++
+ 6 files changed, 872 insertions(+)
+ create mode 100644 lib/screens/blacklists_screen.dart
+ create mode 100644 lib/services/blacklist_repository.dart
+ create mode 100644 test/blacklist_repository_test.dart
+ create mode 100644 test/blacklists_screen_test.dart
+
+diff --git a/lib/screens/blacklists_screen.dart b/lib/screens/blacklists_screen.dart
+new file mode 100644
+index 0000000..e880261
+--- /dev/null
++++ b/lib/screens/blacklists_screen.dart
+@@ -0,0 +1,284 @@
++import 'dart:async';
++
++import 'package:flutter/material.dart';
++import 'package:flutter_riverpod/flutter_riverpod.dart';
++import 'package:luci_mobile/main.dart';
++import 'package:luci_mobile/l10n/luci_localizations.dart';
++import 'package:luci_mobile/services/blacklist_repository.dart';
++import 'package:luci_mobile/widgets/luci_app_bar.dart';
++
++class BlacklistsScreen extends ConsumerStatefulWidget {
++  final BlacklistRepository? repository;
++  const BlacklistsScreen({super.key, this.repository});
++
++  @override
++  ConsumerState<BlacklistsScreen> createState() => _BlacklistsScreenState();
++}
++
++class _BlacklistsScreenState extends ConsumerState<BlacklistsScreen> {
++  BlacklistRepository? _repository;
++  BlacklistSnapshot? _snapshot;
++  String? _loadError;
++  String? _operationError;
++  String _query = '';
++  bool _loading = true;
++  bool _saving = false;
++  bool get _busy => _loading || _saving;
++
++  @override
++  void initState() {
++    super.initState();
++    try {
++      _repository = widget.repository ?? ref.read(appStateProvider).createBlacklistRepository();
++      unawaited(_load());
++    } catch (error) {
++      _loading = false;
++      _loadError = error.toString();
++    }
++  }
++
++  Future<void> _load() async {
++    if (_repository == null) return;
++    setState(() => _loading = true);
++    try {
++      final snapshot = await _repository!.load();
++      if (!mounted) return;
++      setState(() {
++        _snapshot = snapshot;
++        _loadError = null;
++      });
++    } catch (error) {
++      if (!mounted) return;
++      setState(() {
++        _snapshot = null;
++        _loadError = error.toString();
++      });
++    } finally {
++      if (mounted) setState(() => _loading = false);
++    }
++  }
++
++  Future<void> _mutate(Future<void> Function() action) async {
++    if (_busy) return;
++    setState(() {
++      _saving = true;
++      _operationError = null;
++    });
++    var succeeded = false;
++    try {
++      await action();
++      succeeded = true;
++    } catch (error) {
++      if (mounted) setState(() => _operationError = error.toString());
++ }
++    // Reload even after a failure: a commit may have succeeded before reload
++    // failed. Show the router's actual saved selections rather than optimism.
++    if (!mounted) return;
++    await _load();
++    if (!mounted) return;
++    setState(() => _saving = false);
++    if (succeeded) {
++      ScaffoldMessenger.of(context).showSnackBar(
++        const SnackBar(content: Text('Changes saved. Adblock reload requested.')),
++      );
++    }
++  }
++
++  Future<void> _addDomain() async {
++    if (_busy) return;
++    final controller = TextEditingController();
++    final formKey = GlobalKey<FormState>();
++    final route = DialogRoute<String>(
++        context: context,
++        builder: (dialogContext) => AlertDialog(
++          title: const Text('Add domain'),
++          scrollable: true,
++          content: Form(
++            key: formKey,
++            child: Column(
++              mainAxisSize: MainAxisSize.min,
++              crossAxisAlignment: CrossAxisAlignment.start,
++              children: [
++                const Text('Add a domain to your router’s custom blacklist. '
++                    'Downloaded blocklists are managed by their publishers.'),
++                const SizedBox(height: 16),
++                TextFormField(
++                  controller: controller,
++                  autofocus: true,
++                  autocorrect: false,
++                  enableSuggestions: false,
++                  keyboardType: TextInputType.url,
++                  decoration: const InputDecoration(
++                    labelText: 'Domain',
++                    hintText: 'example.com',
++                    border: OutlineInputBorder(),
++                    errorMaxLines: 4,
++                  ),
++                  validator: (value) {
++    try {
++                      final normalized = AdblockBlacklistRepository.normalizeDomain(value ?? '');
++                      final existing = _snapshot?.domains ?? [];
++                      if (existing.any((entry) => entry.toLowerCase() == normalized)) {
++                        return 'This domain is already in your custom blacklist.';
++                      }
++                      return null;
++                    } on BlacklistException catch (error) {
++                      return error.message;
++                    }
++                  },
++                  onFieldSubmitted: (_) {
++                    if (formKey.currentState!.validate()) {
++                      Navigator.of(dialogContext).pop(controller.text);
++                    }
++                  },
++                ),
++              ],
++            ),
++          ),
++          actions: [
++            TextButton(
++              onPressed: () => Navigator.of(dialogContext).pop(),
++              child: Text(context.l10n.cancel),
++            ),
++            FilledButton(
++              onPressed: () {
++                if (formKey.currentState!.validate()) {
++                  Navigator.of(dialogContext).pop(controller.text);
++                }
++              },
++              child: const Text('Add domain'),
++            ),
++          ],
++        ),
++      );
++    String? domain;
++    try {
++      domain = await Navigator.of(context).push(route);
++    } finally {
++      unawaited(route.completed.then((_) => controller.dispose()));
++    }
++    if (domain == null || !mounted) return;
++    final value = domain;
++    await _mutate(() => _repository!.addDomain(value));
++  }
++
++  Widget _error(String message) => Card(
++    color: Theme.of(context).colorScheme.errorContainer,
++    child: Padding(
++      padding: const EdgeInsets.all(16),
++      child: Text(message, style: TextStyle(color: Theme.of(context).colorScheme.onErrorContainer)),
++    ),
++  );
++
++  @override
++  Widget build(BuildContext context) {
++    final snapshot = _snapshot;
++    final feeds = snapshot?.feeds.where((feed) =>
++        '${feed.id} ${feed.description}'.toLowerCase().contains(_query)).toList() ?? [];
++    return Scaffold(
++         appBar: LuciAppBar(
++        title: 'Blacklist repository',
++        showBack: true,
++        actions: [
++          IconButton(
++            tooltip: 'Refresh',
++            onPressed: _busy || _repository == null ? null : () => unawaited(_load()),
++            icon: const Icon(Icons.refresh),
++          ),
++        ],
++      ),
++      floatingActionButton: snapshot == null ? null : FloatingActionButton.extended(
++        onPressed: _busy || snapshot.domainError != null ? null : () => unawaited(_addDomain()),
++        icon: const Icon(Icons.add),
++        label: const Text('Add domain'),
++      ),
++      body: _loading && snapshot == null
++          ? const Center(child: CircularProgressIndicator())
++          : ListView(
++              padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
++              children: [
++                if (_busy) const LinearProgressIndicator(),
++                if (_operationError != null) _error(_operationError!),
++                if (_loadError != null) ...[
++                  _error(_loadError!),
++                  if (_repository != null)
++                    OutlinedButton(onPressed: _busy ? null : () => unawaited(_load()), child: const Text('Retry')),
++                ],
++                if (snapshot != null) ...[
++                  Card(
++                    child: SwitchListTile(
++                      title: const Text('DNS blocking'),
++                      subtitle: const Text('Enable or disable OpenWrt adblock on this router.'),
++                      value: snapshot.enabled,
++                      onChanged: _busy ? null : (enabled) =>
++                          unawaited(_mutate(() => _repository!.setEnabled(enabled))),
++                    ),
++                  ),
++                  if (!snapshot.enabled)
++                    const Padding(
++                      padding: EdgeInsets.all(12),
++                      child: Text('Adblock is disabled. Your list choices and custom domains '
++                          'will take effect when DNS blocking is enabled.'),
++                    ),
++                  const LuciSectionHeader('Custom blacklist'),
++                  if (snapshot.domainError != null)
++                    _error(snapshot.domainError!)
++                  else Card(
++                    child: Padding(
++                      padding: const EdgeInsets.all(16),
++                      child: Column(
++                        crossAxisAlignment: CrossAxisAlignment.start,
++                        children: [
++                          Text('${snapshot.domains.length} custom domains'),
++                          const SizedBox(height: 8),
++                          if (snapshot.domains.isEmpty)
++                            const Text('Use Add domain to block your first domain.'),
++                          ...snapshot.domains.take(10).map((domain) => Text(domain)),
++                          if (snapshot.domains.length > 10)
++                            TextButton(
++                              onPressed: () => unawaited(showModalBottomSheet<void>(
++                                context: context,
++                                showDragHandle: true,
++                                builder: (context) => ListView.builder(
++                                  itemCount: snapshot.domains.length,
++                                  itemBuilder: (context, index) => ListTile(title: Text(snapshot.domains[index])),
++                                ),
++                              )),
++                              child: const Text('View all domains'),
++                            ),
++                        ],
++                      ),
++                    ),
++                  ),
++                  LuciSectionHeader('Blocklists (${snapshot.feeds.where((feed) => feed.enabled).length} selected)'),
++                  const Padding(
++                    padding: EdgeInsets.symmetric(vertical: 8),
++                    child: Text('Choose lists from your router’s adblock catalog. '
++                        'Changes reload adblock; downloading lists may take a few minutes.'),
++                  ),
++                 TextField(
++                    decoration: const InputDecoration(
++                      prefixIcon: Icon(Icons.search),
++                      hintText: 'Search blocklists',
++                      border: OutlineInputBorder(),
++                    ),
++                    onChanged: (value) => setState(() => _query = value.trim().toLowerCase()),
++                  ),
++                  const SizedBox(height: 12),
++                  if (feeds.isEmpty) const Text('No blocklists found.'),
++                  ...feeds.map((feed) => Card(
++                    child: SwitchListTile(
++                      title: Text(feed.id),
++                      subtitle: feed.description.isEmpty ? null : Text(feed.description),
++                      value: feed.enabled,
++                      onChanged: _busy ? null : (enabled) => unawaited(
++                        _mutate(() => _repository!.setFeedEnabled(feed.id, enabled)),
++                      ),
++                    ),
++                  )),
++                ],
++              ],
++            ),
++    );
++  }
++}
+diff --git a/lib/screens/more_screen.dart b/lib/screens/more_screen.dart
+index 0b681ba..69ba422 100644
+--- a/lib/screens/more_screen.dart
++++ b/lib/screens/more_screen.dart
+@@ -12,6 +12,7 @@ import 'package:url_launcher/url_launcher_string.dart';
+ import 'package:luci_mobile/config/app_config.dart';
+ import 'package:luci_mobile/screens/manage_routers_screen.dart';
+ import 'package:luci_mobile/screens/wifi_scan_screen.dart';
++import 'package:luci_mobile/screens/blacklists_screen.dart';
+ import 'package:luci_mobile/utils/http_client_manager.dart';
+ import 'package:luci_mobile/state/app_state.dart';
+ import 'package:luci_mobile/l10n/luci_localizations.dart';
+@@ -318,6 +319,20 @@ class _MoreScreenState extends ConsumerState<MoreScreen> {
+                 final rebootEnabled = canReboot == true && !isRebooting;
+                 return _MoreScreenSection(
+                   tiles: [
++                    _buildMoreTile(
++                      context,
++                      icon: Icons.shield_outlined,
++                      iconColor: Theme.of(context).colorScheme.primary,
++                      title: 'Blacklists',
++                      subtitle: 'Manage DNS blocklists and add custom domains',
++                      onTap: () {
++                        unawaited(Navigator.of(context).push(
++                          MaterialPageRoute<void>(
++                            builder: (context) => const BlacklistsScreen(),
++                          ),
++                        ));
++                      },
++                    ),
+                     _buildMoreTile(
+                       context,
+                       icon: Icons.wifi_find,
+diff --git a/lib/services/blacklist_repository.dart b/lib/services/blacklist_repository.dart
+new file mode 100644
+index 0000000..077ba5f
+--- /dev/null
++++ b/lib/services/blacklist_repository.dart
+@@ -0,0 +1,270 @@
++import 'dart:convert';
++
++typedef BlacklistRpc = Future<dynamic> Function(
++  String object,
++  String method,
++  Map<String, dynamic> params,
++);
++
++class BlacklistFeed {
++  final String id;
++  final String description;
++  final bool enabled;
++
++  const BlacklistFeed(this.id, this.description, this.enabled);
++}
++
++class BlacklistSnapshot {
++  final bool enabled;
++  final List<BlacklistFeed> feeds;
++  final List<String> domains;
++  final String? domainError;
++
++  const BlacklistSnapshot({
++    required this.enabled,
++    required this.feeds,
++    required this.domains,
++    this.domainError,
++  });
++}
++
++abstract class BlacklistRepository {
++  Future<BlacklistSnapshot> load();
++  Future<void> setEnabled(bool enabled);
++  Future<void> setFeedEnabled(String id, bool enabled);
++  Future<void> addDomain(String domain);
++}
++
++class BlacklistException implements Exception {
++  final String message;
++  const BlacklistException(this.message);
++  @override
++  String toString() => message;
++}
++
++/// OpenWrt adblock (not adblock-fast, Pi-hole, or AdGuard Home).
++/// Mutations persist configuration and request a reload; DNS propagation and
++/// feed download success still depend on the router's adblock service.
++class AdblockBlacklistRepository implements BlacklistRepository {
++  final BlacklistRpc rpc;
++
++  AdblockBlacklistRepository(this.rpc);
++
++  static String normalizeDomain(String input) {
++    final domain = input.trim().toLowerCase().replaceFirst(RegExp(r'\.$'), '');
++    final labels = domain.split('.');
++    final labelPattern = RegExp(r'^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$');
++    if (domain.length > 253 ||
++        labels.length < 2 ||
++        labels.any((label) => !labelPattern.hasMatch(label)) ||
++        !RegExp(r'[a-z]').hasMatch(labels.last)) {
++      throw const BlacklistException(
++        'Enter a domain such as example.com, without a URL, path, or wildcard. '
++        'Use punycode for international domain names.',
++      );
++    }
++    return domain;
++  }
++
++  Future<Map<String, dynamic>> _call(
++    String object,
++    String method,
++    Map<String, dynamic> params, {
++    bool allowMissing = false,
++  }) async {
++    final result = await rpc(object, method, params);
++    if (allowMissing && result is List && result.isNotEmpty && result[0] == 4) {
++      return {};
++    }
++    if (result is! List || result.isEmpty || result[0] != 0 ||
++        result.length > 2 || (result.length == 2 && result[1] is! Map)) {
++      final status = result is List && result.isNotEmpty ? result[0] : null;
++      throw BlacklistException(
++        status == 6
++            ? 'The router denied access. An administrator account with adblock, '
++                'UCI, and file permissions is required.'
++            : 'Could not complete $object.$method (RPC status $status). '
++                'Check the router connection and permissions.',
++      );
++    }
++    return result.length == 1 ? {} : Map<String, dynamic>.from(result[1] as Map);
++  }
++
++  Future<_AdblockConfig> _config() async {
++    final data = await _call('uci', 'get', {'config': 'adblock'}, allowMissing: true);
++    final values = data['values'];
++    if (values is! Map || values['global'] is! Map ||
++        (values['global'] as Map)['.type'] != 'adblock') {
++      throw const BlacklistException(
++        'OpenWrt adblock was not found. This page requires the adblock package; '
++        'adblock-fast, Pi-hole, and AdGuard Home use different APIs.',
++      );
++    }
++    return _AdblockConfig(Map<String, dynamic>.from(values['global'] as Map));
++  }
++
++  Future<String> _read(String path, {bool allowMissing = false}) async {
++    final data = await _call('file', 'read', {'path': path}, allowMissing: allowMissing);
++    if (data.isEmpty && allowMissing) return '';
++    if (data['data'] is! String) {
++      throw const BlacklistException('The router returned an unreadable adblock file.');
++    }
++    return data['data'] as String;
++  }
++
++  Future<Map<String, dynamic>> _catalog(_AdblockConfig config) async {
++    String contents;
++    if (config.legacy) {
++      final result = await _call('file', 'exec', {
++        'command': '/bin/gzip',
++        'params': ['-dc', config.catalogPath],
++      });
++      if (result['code'] != 0 || result['stdout'] is! String) {
++        throw const BlacklistException('Could not read the adblock source archive.');
++      }
++      contents = result['stdout'] as String;
++    } else {
++      // adblock uses a nonempty custom catalog in place of its default catalog.
++      final custom = await _read(config.customCatalogPath, allowMissing: true);
++      contents = custom.trim().isNotEmpty ? custom : await _read(config.catalogPath);
++    }
++    final decoded = jsonDecode(contents);
++    if (decoded is! Map) {
++      throw const BlacklistException('The router returned an invalid blocklist catalog.');
++    }
++    return Map<String, dynamic>.from(decoded);
++  }
++
++  static List<String> _domains(String contents) {
++    final domains = <String>{};
++    for (final line in const LineSplitter().convert(contents)) {
++    +      final value = line.split('#').first.trim();
++      if (value.isNotEmpty) domains.add(value);
++    }
++    return domains.toList()..sort();
++  }
++
++  @override
++  Future<BlacklistSnapshot> load() async {
++    final config = await _config();
++    final catalog = await _catalog(config);
++    final ids = {...catalog.keys, ...config.selected}.toList()..sort();
++    final feeds = ids.map((id) {
++      final entry = catalog[id];
++      final description = entry is Map ? entry['descr'] ?? entry['focus'] : null;
++      return BlacklistFeed(id, description?.toString() ?? '', config.selected.contains(id));
++    }).toList();
++    var domains = <String>[];
++    String? domainError;
++    try {
++      domains = _domains(await _read(config.domainPath, allowMissing: true));
++    } catch (error) {
++      domainError = error.toString();
++    }
++    return BlacklistSnapshot(
++      enabled: config.enabled,
++      feeds: feeds,
++      domains: domains,
++      domainError: domainError,
++    );
++  }
++
++  Future<void> _reload() async {
++    try {
++      final result = await _call('file', 'exec', {
++        'command': '/etc/init.d/adblock',
++        'params': ['reload'],
++      });
++      if (result['code'] != 0) {
++        throw const BlacklistException('The adblock reload command failed.');
++      }
++    } catch (_) {
++      throw const BlacklistException(
++        'Changes were saved, but adblock could not be reloaded. '
++        'Reload adblock on the router, then refresh this page.',
++      );
++    }
++  }
++
++  Future<void> _save(Map<String, dynamic> values) async {
++    await _call('uci', 'set', {'config': 'adblock', 'section': 'global', 'values': values});
++    await _call('uci', 'commit', {'config': 'adblock'});
++    await _reload();
++  }
++
++  @override
++  Future<void> setEnabled(bool enabled) async {
++    await _config();
++    await _save({'adb_enabled': enabled ? '1' : '0'});
++  }
++
++  @override
++  Future<void> setFeedEnabled(String id, bool enabled) async {
++    // Read immediately before writing to preserve the other selected feeds.
++    final config = await _config();
++    final catalog = await _catalog(config);
++    if (enabled && !catalog.containsKey(id)) {
++      throw const BlacklistException('This blocklist is no longer available on the router.');
++    }
++    final selected = [...config.selected];
++    selected.removeWhere((value) => value == id);
++    if (enabled) selected.add(id);
++    await _save({config.feedOption: selected});
++  }
++
++  @override
++  Future<void> addDomain(String domain) async {
++    final normalized = normalizeDomain(domain);
++    final config = await _config();
++    // Append via positional arguments, never interpolate input into shell code.
++    // Existing comments and entries remain untouched; simultaneous appends do
++    // not replace the file with an old snapshot.
++    final result = await _call('file', 'exec', {
++      'command': '/bin/sh',
++      'params': [
++        '-c',
++        r'set -e; touch "$1"; '
++            r'if ! grep -Fxiq -- "$2" "$1"; then printf "\n%s\n" "$2" >> "$1"; fi',
++        'adblock-add-domain',
++        config.domainPath,
++        normalized,
++      ],
++    });
++    if (result['code'] != 0) {
++      throw const BlacklistException('The domain could not be saved. Check file permissions.');
++    }
++    await _reload();
++  }
++}
++
++class _AdblockConfig {
++  final Map<String, dynamic> values;
++  _AdblockConfig(this.values);
++
++  bool get legacy => !values.containsKey('adb_feed') &&
++      (values.containsKey('adb_sources') || values.containsKey('adb_blacklist') ||
++          values.containsKey('adb_srcarc'));
++  bool get enabled => values['adb_enabled']?.toString() == '1';
++  String get feedOption => legacy ? 'adb_sources' : 'adb_feed';
++  List<String> get selected {
++    final raw = values[feedOption];
++    return raw is List ? raw.map((v) => v.toString()).toList() :
++        raw is String ? raw.split(RegExp(r'\s+')).where((v) => v.isNotEmpty).toList() : [];
++  }
++
++  String get catalogPath => _path(legacy ? 'adb_srcarc' : 'adb_feedfile',
++      legacy ? '/etc/adblock/adblock.sources.gz' : '/etc/adblock/adblock.feeds');
++  String get customCatalogPath => _path('adb_customfeedfile', '/etc/adblock/adblock.custom.feeds');
++  String get domainPath => _path(legacy ? 'adb_blacklist' : 'adb_blocklist',
++      legacy ? '/etc/adblock/adblock.blacklist' : '/etc/adblock/adblock.blocklist');
++
++  String _path(String key, String fallback) {
++    final path = values[key]?.toString() ?? fallback;
++    if (!path.startsWith('/etc/adblock/') ||
++        path.split('/').any((part) => part == '..' || part == '.') ||
++        path.contains('\u0000') || path.contains('\n')) {
++      throw const BlacklistException('This page supports adblock files under /etc/adblock/.');
++    }
++    return path;
++  }
++}
+diff --git a/lib/state/app_state.dart b/lib/state/app_state.dart
+index bbaf69d..2592fdb 100644
+--- a/lib/state/app_state.dart
++++ b/lib/state/app_state.dart
+@@ -16,6 +16,7 @@ import 'package:luci_mobile/services/interfaces/auth_service_interface.dart';
+ import 'package:luci_mobile/services/interfaces/api_service_interface.dart';
+ import 'package:luci_mobile/services/interfaces/glinet_api_service_interface.dart';
+ import 'package:luci_mobile/services/api_service.dart';
++import 'package:luci_mobile/services/blacklist_repository.dart';
+ import 'package:luci_mobile/services/service_factory.dart';
+ import 'package:luci_mobile/config/app_config.dart';
+ import 'package:luci_mobile/utils/http_client_manager.dart';
+@@ -316,6 +317,46 @@ class AppState extends ChangeNotifier {
+   }
+ 
+   String? get sysauth => _authService?.sysauth;
++
++  /// Bind the page to this login session so switching routers cannot redirect
++  /// a pending configuration change to another device.
++  BlacklistRepository createBlacklistRepository() {
++    final api = _apiService;
++    final auth = _authService;
++    final generation = _sessionToken;
++    final ip = auth?.ipAddress;
++    final token = auth?.sysauth;
++    final https = auth?.useHttps ?? false;
++    if (_reviewerModeEnabled || api == null || ip == null || token == null) {
++      throw const BlacklistException(
++        'Connect to an OpenWrt router to manage blacklists. '
++        'Blacklist changes are unavailable in reviewer mode.',
++      );
++    }
++    return AdblockBlacklistRepository((object, method, params) async {
++      if (_sessionToken != generation ||
++          _authService?.sysauth != token ||
++          _authService?.ipAddress != ip) {
++        throw const BlacklistException(
++          'The router session changed. Reopen Blacklists to continue.',
++        );
++      }
++      try {
++        return await api.call(
++          ip,
++          token,
++          https,
++          object: object,
++          method: method,
++          params: params,
++        );
++      } on RpcException catch (error) {
++        if (error.status != null) return [error.status, <String, dynamic>{}];
++        rethrow;
++      }
++    });
++  }
++
+   bool get isAuthenticated => _authService?.isAuthenticated ?? false;
+   bool get hasRouters =>
+       _routerService != null && _routerService!.routers.isNotEmpty;
+diff --git a/test/blacklist_repository_test.dart b/test/blacklist_repository_test.dart
+new file mode 100644
+index 0000000..030c05f
+--- /dev/null
++++ b/test/blacklist_repository_test.dart
+@@ -0,0 +1,163 @@
++import 'dart:convert';
++
++import 'package:flutter_test/flutter_test.dart';
++import 'package:luci_mobile/services/blacklist_repository.dart';
++
++class _Router {
++  final values = <String, dynamic>{
++    '.type': 'adblock',
++    'adb_enabled': '1',
++    'adb_feed': ['adguard', 'existing_custom'],
++  };
++  final files = <String, String>{
++    '/etc/adblock/adblock.feeds': jsonEncode({
++      'adguard': {'descr': 'general'},
++      'tracking': {'descr': 'tracking'},
++    }),
++    '/etc/adblock/adblock.blocklist': '# Keep this comment\nexample.com\n',
++  };
++  final calls = <(String, String, Map<String, dynamic>)>[];
++  bool denyReads = false;
++  bool failReload = false;
++  bool failCommit = false;
++  bool emptySuccess = false;
++
++  Future<dynamic> call(String object, String method, Map<String, dynamic> params) async {
++    calls.add((object, method, params));
++    if (object == 'uci' && method == 'get') {
++      return [0, {'values': {'global': Map<String, dynamic>.from(values)}}];
++    }
++    if (object == 'uci' && method == 'set') {
++      values.addAll(Map<String, dynamic>.from(params['values'] as Map));
++      return emptySuccess ? [0] : [0, <String, dynamic>{}];
++    }
++    if (object == 'uci' && method == 'commit') {
++      return emptySuccess && !failCommit ? [0] : [failCommit ? 6 : 0, <String, dynamic>{}];
++    }
++    if (object == 'file' && method == 'read') {
++      if (denyReads) return [6, <String, dynamic>{}];
++      final contents = files[params['path']];
++      return contents == null ? [4, <String, dynamic>{}] : [0, {'data': contents}];
++    }
++    if (object == 'file' && method == 'exec') {
++      if (params['command'] == '/etc/init.d/adblock') {
++        return [0, {'code': failReload ? 1 : 0}];
++      }
++      if (params['command'] == '/bin/gzip') {
++        return [0, {'code': 0, 'stdout': jsonEncode({'legacy': {'focus': 'ads'}})}];
++      }
++      if (params['command'] == '/bin/sh') return [0, {'code': 0}];
++    }
++    throw StateError('Unexpected RPC $object.$method');
++  }
++}
++
++void main() {
++  test('loads router catalog, saved selections, and custom domains', () async {
++    final router = _Router();
++    final repository = AdblockBlacklistRepository(router.call);
++    final snapshot = await repository.load();
++    expect(snapshot.enabled, isTrue);
++    expect(snapshot.feeds.map((feed) => feed.id), ['adguard', 'existing_custom', 'tracking']);
++    expect(snapshot.feeds.where((feed) => feed.enabled).map((feed) => feed.id),
++        ['adguard', 'existing_custom']);
++    expect(snapshot.domains, ['example.com']);
++    expect(snapshot.domainError, isNull);
++    expect(router.calls.every((call) => call.$2 != 'set' && call.$2 != 'commit'), isTrue);
++  });
++
++  test('toggles a feed without dropping existing custom selections', () async {
++    final router = _Router();
++    final repository = AdblockBlacklistRepository(router.call);
++    await repository.setFeedEnabled('tracking', true);
++    expect(router.values['adb_feed'], ['adguard', 'existing_custom', 'tracking']);
++    await repository.setFeedEnabled('adguard', false);
++    expect(router.values['adb_feed'], ['existing_custom', 'tracking']);
++    expect(router.calls.where((call) => call.$2 == 'commit'), hasLength(2));
++    expect(router.calls.last.$3['command'], '/etc/init.d/adblock');
++    expect(router.calls.last.$3['params'], ['reload']);
++  });
++
++  test('accepts successful UCI replies with no payload', () async {
++    final router = _Router()..emptySuccess = true;
++    await AdblockBlacklistRepository(router.call).setEnabled(false);
++    expect(router.values['adb_enabled'], '0');
++    expect(router.calls.last.$3['command'], '/etc/init.d/adblock');
++  });
++
++  test('uses the custom catalog instead of the default when present', () async {
++    final router = _Router();
++    router.files['/etc/adblock/adblock.custom.feeds'] = jsonEncode({'private': {'descr': 'custom'}});
++    final repository = AdblockBlacklistRepository(router.call);
++    final snapshot = await repository.load();
++    expect(snapshot.feeds.map((feed) => feed.id), contains('private'));
++    expect(snapshot.feeds.map((feed) => feed.id), isNot(contains('tracking')));
++    await expectLater(repository.setFeedEnabled('tracking', true), throwsA(isA<BlacklistException>()));
++    expect(router.calls.where((call) => call.$2 == 'set'), isEmpty);
++  });
++
++  test('supports legacy adblock sources archive and blacklist path', () async {
++    final router = _Router();
++    router.values.remove('adb_feed');
++    router.values['adb_sources'] = ['legacy'];
++    router.files['/etc/adblock/adblock.blacklist'] = 'legacy.example\n';
++    final repository = AdblockBlacklistRepository(router.call);
++    final snapshot = await repository.load();
++    expect(snapshot.feeds.single.enabled, isTrue);
++    expect(snapshot.domains, ['legacy.example']);
++    await repository.setFeedEnabled('legacy', false);
++    expect(router.values['adb_sources'], isEmpty);
++    expect(router.values.containsKey('adb_feed'), isFalse);
++    expect(router.calls.any((call) => call.$3['command'] == '/bin/gzip'), isTrue);
++  });
++
++  test('adds a normalized domain as an argument and requests reload', () async {
++    final router = _Router();
++    final repository = AdblockBlacklistRepository(router.call);
++    await repository.addDomain('  ADS.Example.COM.  ');
++    final append = router.calls.firstWhere((call) => call.$3['command'] == '/bin/sh');
++    final params = append.$3['params'] as List;
++    expect(params.last, 'ads.example.com');
++    expect(params[params.length - 2], '/etc/adblock/adblock.blocklist');
++    expect(params[1], isNot(contains('ads.example.com')));
++    expect(router.calls.last.$3['command'], '/etc/init.d/adblock');
++  });
++
++  test('rejects URLs, IPs, wildcard domains, invalid labels, and injection', () {
++    for (final value in ['', 'https://example.com', 'example.com/path', '*.example.com',
++      '192.168.1.1', '-bad.example', 'bad_.example', 'example.com\nother.example',
++      'example.com;reboot', 'example', '${List.filled(64, 'a').join()}.com']) {
++      expect(() => AdblockBlacklistRepository.normalizeDomain(value),
++          throwsA(isA<BlacklistException>()), reason: value);
++    }
++    expect(AdblockBlacklistRepository.normalizeDomain('xn--bcher-kva.de'), 'xn--bcher-kva.de');
++  });
++
++  test('permission denial is not treated as an empty file', () async {
++    final router = _Router()..denyReads = true;
++    await expectLater(AdblockBlacklistRepository(router.call).load(),
++        throwsA(isA<BlacklistException>().having((e) => e.message, 'message', contains('denied'))));
++  });
++
++  test('reload failure reports that configuration was saved', () async {
++    final router = _Router()..failReload = true;
++    await expectLater(AdblockBlacklistRepository(router.call).setEnabled(false),
++        throwsA(isA<BlacklistException>().having((e) => e.message, 'message', contains('Changes were saved'))));
++    expect(router.values['adb_enabled'], '0');
++  });
++
++  test('a failed commit does not request reload', () async {
++    final router = _Router()..failCommit = true;
++    await expectLater(AdblockBlacklistRepository(router.call).setEnabled(false),
++        throwsA(isA<BlacklistException>()));
++    expect(router.calls.where((call) => call.$3['command'] == '/etc/init.d/adblock'), isEmpty);
++  });
++
++  test('rejects unsafe configured paths before writing a domain', () async {
++    final router = _Router();
++    router.values['adb_blocklist'] = '/etc/adblock/../config/network';
++    await expectLater(AdblockBlacklistRepository(router.call).addDomain('example.com'),
++        throwsA(isA<BlacklistException>()));
++    expect(router.calls.where((call) => call.$3['command'] == '/bin/sh'), isEmpty);
++  });
++}
+diff --git a/test/blacklists_screen_test.dart b/test/blacklists_screen_test.dart
+new file mode 100644
+index 0000000..daa9238
+--- /dev/null
++++ b/test/blacklists_screen_test.dart
+@@ -0,0 +1,99 @@
++import 'package:flutter/material.dart';
++import 'package:flutter_riverpod/flutter_riverpod.dart';
++import 'package:flutter_test/flutter_test.dart';
++import 'package:luci_mobile/screens/blacklists_screen.dart';
++import 'package:luci_mobile/services/blacklist_repository.dart';
++
++class _Repository implements BlacklistRepository {
++  bool enabled = true;
++  bool feedEnabled = false;
++  bool fail = false;
++  final domains = <String>[];
++
++  @override
++  Future<BlacklistSnapshot> load() async => BlacklistSnapshot(
++    enabled: enabled,
++    feeds: [BlacklistFeed('adguard', 'general', feedEnabled)],
++    domains: List.of(domains),
++  );
++
++  @override
++  Future<void> setEnabled(bool value) async {
++    enabled = value;
++  }
++
++  @override
++  Future<void> setFeedEnabled(String id, bool value) async {
++    if (fail) throw const BlacklistException('Router denied the change.');
++    feedEnabled = value;
++  }
++
++  @override
++  Future<void> addDomain(String domain) async {
++    domains.add(AdblockBlacklistRepository.normalizeDomain(domain));
++  }
++}
++
++Future<void> _open(WidgetTester tester, _Repository repository) async {
++  await tester.pumpWidget(ProviderScope(
++    child: MaterialApp(home: BlacklistsScreen(repository: repository)),
++  ));
++  await tester.pumpAndSettle();
++}
++
++void main() {
++  testWidgets('toggles a downloaded blocklist and reloads its saved state', (tester) async {
++    final repository = _Repository();
++    await _open(tester, repository);
++    await tester.ensureVisible(find.text('adguard'));
++    await tester.tap(find.text('adguard'));
++    await tester.pumpAndSettle();
++    expect(repository.feedEnabled, isTrue);
++    final tile = tester.widget<SwitchListTile>(find.ancestor(
++      of: find.text('adguard'), matching: find.byType(SwitchListTile),
++    ));
++    expect(tile.value, isTrue);
++  });
++
++  testWidgets('failed changes show an error and keep the saved toggle state', (tester) async {
++    final repository = _Repository()..fail = true;
++    await _open(tester, repository);
++    await tester.ensureVisible(find.text('adguard'));
++    await tester.tap(find.text('adguard'));
++    await tester.pumpAndSettle();
++    expect(repository.feedEnabled, isFalse);
++    await tester.scrollUntilVisible(find.text('Router denied the change.'), -300);
++    expect(find.text('Router denied the change.'), findsOneWidget);
++  });
++
++  testWidgets('invalid domains stay in the dialog, valid domains are saved', (tester) async {
++    final repository = _Repository();
++    await _open(tester, repository);
++    await tester.tap(find.text('Add domain'));
++    await tester.pumpAndSettle();
++    await tester.enterText(find.byType(TextFormField), 'https://example.com');
++    await tester.tap(find.widgetWithText(FilledButton, 'Add domain'));
++    await tester.pumpAndSettle();
++    expect(repository.domains, isEmpty);
++    expect(find.byType(AlertDialog), findsOneWidget);
++    await tester.enterText(find.byType(TextFormField), ' ADS.Example.COM. ');
++    await tester.tap(find.widgetWithText(FilledButton, 'Add domain'));
++    await tester.pumpAndSettle();
++    expect(repository.domains, ['ads.example.com']);
++    expect(find.text('ads.example.com'), findsOneWidget);
++  });
++
++  testWidgets('duplicate domains are rejected before saving', (tester) async {
++    final repository = _Repository()..domains.add('example.com');
++    await _open(tester, repository);
++    await tester.tap(find.text('Add domain'));
++    await tester.pumpAndSettle();
++    await tester.enterText(find.byType(TextFormField), 'EXAMPLE.COM');
++    await tester.tap(find.widgetWithText(FilledButton, 'Add domain'));
++    await tester.pumpAndSettle();
++    expect(find.text('This domain is already in your custom blacklist.'), findsOneWidget);
++    expect(repository.domains, ['example.com']);
++    await tester.tap(find.widgetWithText(TextButton, 'Cancel'));
++    await tester.pumpAndSettle();
++  });
++}
+-- 
+2.52.0
+

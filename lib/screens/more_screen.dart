@@ -12,6 +12,7 @@ import 'package:url_launcher/url_launcher_string.dart';
 import 'package:luci_mobile/config/app_config.dart';
 import 'package:luci_mobile/screens/manage_routers_screen.dart';
 import 'package:luci_mobile/screens/wifi_scan_screen.dart';
+import 'package:luci_mobile/screens/blacklists_screen.dart';
 import 'package:luci_mobile/utils/http_client_manager.dart';
 import 'package:luci_mobile/state/app_state.dart';
 import 'package:luci_mobile/l10n/luci_localizations.dart';
@@ -318,6 +319,20 @@ class _MoreScreenState extends ConsumerState<MoreScreen> {
                 final rebootEnabled = canReboot == true && !isRebooting;
                 return _MoreScreenSection(
                   tiles: [
+                    _buildMoreTile(
+                      context,
+                      icon: Icons.shield_outlined,
+                      iconColor: Theme.of(context).colorScheme.primary,
+                      title: 'Blacklists',
+                      subtitle: 'Manage DNS blocklists and add custom domains',
+                      onTap: () {
+                        unawaited(Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (context) => const BlacklistsScreen(),
+                          ),
+                        ));
+                      },
+                    ),
                     _buildMoreTile(
                       context,
                       icon: Icons.wifi_find,

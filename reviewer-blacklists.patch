@@ -1,0 +1,95 @@
+diff --git a/lib/services/blacklist_repository.dart b/lib/services/blacklist_repository.dart
+--- a/lib/services/blacklist_repository.dart
++++ b/lib/services/blacklist_repository.dart
+@@ -42,0 +43,41 @@
++}
++
++/// In-memory sample data for reviewer mode. Each page gets a fresh preview.
++class DemoBlacklistRepository implements BlacklistRepository {
++  bool _enabled = true;
++  final _feeds = <String, bool>{
++    'adguard': true,
++    'adaway': false,
++    'tracking': true,
++  };
++  final _domains = <String>{'ads.example.com'};
++
++  @override
++  Future<BlacklistSnapshot> load() async => BlacklistSnapshot(
++    enabled: _enabled,
++    feeds: _feeds.entries.map((entry) => BlacklistFeed(
++      entry.key, 'Example blocklist', entry.value,
++    )).toList(),
++    domains: _domains.toList()..sort(),
++  );
++
++  @override
++  Future<void> setEnabled(bool enabled) async {
++    _enabled = enabled;
++  }
++
++  @override
++  Future<void> setFeedEnabled(String id, bool enabled) async {
++    if (!_feeds.containsKey(id)) {
++      throw const BlacklistException('This example blocklist was not found.');
++    }
++    _feeds[id] = enabled;
++  }
++
++  @override
++  Future<void> addDomain(String domain) async {
++    final normalized = AdblockBlacklistRepository.normalizeDomain(domain);
++    if (!_domains.add(normalized)) {
++      throw const BlacklistException('This domain is already in your custom blacklist.');
++    }
++  }
+diff --git a/lib/state/app_state.dart b/lib/state/app_state.dart
+--- a/lib/state/app_state.dart
++++ b/lib/state/app_state.dart
+@@ -326,0 +327 @@
++    if (_reviewerModeEnabled) return DemoBlacklistRepository();
+@@ -333 +334 @@
+-    if (_reviewerModeEnabled || api == null || ip == null || token == null) {
++    if (api == null || ip == null || token == null) {
+@@ -335,2 +336 @@
+-        'Connect to an OpenWrt router to manage blacklists. '
+-        'Blacklist changes are unavailable in reviewer mode.',
++        'Connect to an OpenWrt router to manage blacklists.',
+diff --git a/lib/screens/blacklists_screen.dart b/lib/screens/blacklists_screen.dart
+--- a/lib/screens/blacklists_screen.dart
++++ b/lib/screens/blacklists_screen.dart
+@@ -26,0 +27 @@
++  bool get _demo => _repository is DemoBlacklistRepository;
+@@ -82 +83,3 @@
+-        const SnackBar(content: Text('Changes saved. Adblock reload requested.')),
++        SnackBar(content: Text(_demo
++            ? 'Demo list updated.'
++            : 'Changes saved. Adblock reload requested.')),
+@@ -101,0 +105,3 @@
++                if (_demo)
++                  const Text('Add a domain to the demo list. No router is changed.'),
++                if (!_demo)
+@@ -207,0 +214,8 @@
++                  if (_demo)
++                    const Card(
++                      child: Padding(
++                        padding: EdgeInsets.all(16),
++                        child: Text('Reviewer mode: sample data. Try the switches and Add domain. '
++                            'No router is changed. The preview resets when you reopen this page.'),
++                      ),
++                    ),
+@@ -211 +225,3 @@
+-                      subtitle: const Text('Enable or disable OpenWrt adblock on this router.'),
++                      subtitle: Text(_demo
++                          ? 'Try DNS blocking in this preview.'
++                          : 'Enable or disable OpenWrt adblock on this router.'),
+@@ -217 +233 @@
+-                  if (!snapshot.enabled)
++                  if (!snapshot.enabled && !_demo)
+@@ -253,0 +270,6 @@
++                  if (_demo)
++                    const Padding(
++                      padding: EdgeInsets.symmetric(vertical: 8),
++                      child: Text('Choose example blocklists to try the controls.'),
++                    ),
++                  if (!_demo)

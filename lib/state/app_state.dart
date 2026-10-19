@@ -16,6 +16,7 @@ import 'package:luci_mobile/services/interfaces/auth_service_interface.dart';
 import 'package:luci_mobile/services/interfaces/api_service_interface.dart';
 import 'package:luci_mobile/services/interfaces/glinet_api_service_interface.dart';
 import 'package:luci_mobile/services/api_service.dart';
+import 'package:luci_mobile/services/blacklist_repository.dart';
 import 'package:luci_mobile/services/service_factory.dart';
 import 'package:luci_mobile/config/app_config.dart';
 import 'package:luci_mobile/utils/http_client_manager.dart';
@@ -316,6 +317,46 @@ class AppState extends ChangeNotifier {
   }
 
   String? get sysauth => _authService?.sysauth;
+
+  /// Bind the page to this login session so switching routers cannot redirect
+  /// a pending configuration change to another device.
+  BlacklistRepository createBlacklistRepository() {
+    final api = _apiService;
+    final auth = _authService;
+    final generation = _sessionToken;
+    if (_reviewerModeEnabled) return DemoBlacklistRepository();
+    final ip = auth?.ipAddress;
+    final token = auth?.sysauth;
+    final https = auth?.useHttps ?? false;
+    if (api == null || ip == null || token == null) {
+      throw const BlacklistException(
+        'Connect to an OpenWrt router to manage blacklists.',
+      );
+    }
+    return AdblockBlacklistRepository((object, method, params) async {
+      if (_sessionToken != generation ||
+          _authService?.sysauth != token ||
+          _authService?.ipAddress != ip) {
+        throw const BlacklistException(
+          'The router session changed. Reopen Blacklists to continue.',
+        );
+      }
+      try {
+        return await api.call(
+          ip,
+          token,
+          https,
+          object: object,
+          method: method,
+          params: params,
+        );
+      } on RpcException catch (error) {
+        if (error.status != null) return [error.status, <String, dynamic>{}];
+        rethrow;
+      }
+    });
+  }
+
   bool get isAuthenticated => _authService?.isAuthenticated ?? false;
   bool get hasRouters =>
       _routerService != null && _routerService!.routers.isNotEmpty;
