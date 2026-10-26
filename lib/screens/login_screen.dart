@@ -49,19 +49,40 @@ class _LoginScreenState extends ConsumerState<LoginScreen>
   }
 
   Future<void> _checkReviewerModeAndAutoLogin() async {
-    // Check if reviewer mode is enabled
     final secureStorage = SecureStorageService();
+
+    // 1. Reviewer mode skips everything and goes to the main screen.
     final reviewerModeEnabled = await secureStorage.readValue(
       AppConfig.reviewerModeKey,
     );
-
-    if (reviewerModeEnabled == 'true' && mounted) {
-      // Navigate directly to main screen in reviewer mode
+    if (!mounted) return;
+    if (reviewerModeEnabled == 'true') {
       unawaited(Navigator.of(context).pushReplacementNamed('/'));
-    } else {
-      // Try auto login
-      unawaited(_tryAutoLogin());
+      return;
     }
+
+    // 2. If first-time setup has never been finished, go to setup.
+    final setupComplete = await secureStorage.readValue(
+      AppConfig.setupCompleteKey,
+    );
+    if (!mounted) return;
+    if (setupComplete != 'true') {
+      unawaited(Navigator.of(context).pushReplacementNamed('/setup'));
+      return;
+    }
+
+    // 3. Just logged out: show the login form instead of auto login.
+    final appState = ref.read(appStateProvider);
+    if (appState.skipNextAutoLogin) {
+      appState.skipNextAutoLogin = false;
+      setState(() {
+        _isCheckingAutoLogin = false;
+      });
+      return;
+    }
+
+    // 4. Setup is done: try auto login like before.
+    unawaited(_tryAutoLogin());
   }
 
   void _startReviewerModeActivation() {

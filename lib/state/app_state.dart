@@ -1,3 +1,4 @@
+
 import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
@@ -32,6 +33,10 @@ class AppState extends ChangeNotifier {
   RouterService? _routerService;
   ThroughputService? _throughputService;
   final HttpClientManager _httpClientManager = HttpClientManager();
+
+  // Set by logout() so the login screen shows the form instead of
+  // logging straight back in with the saved router.
+  bool skipNextAutoLogin = false;
 
   // Reviewer mode state
   bool _reviewerModeEnabled = false;
@@ -605,6 +610,7 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> logout() async {
+    skipNextAutoLogin = true;
     final token = ++_sessionToken;
     _cancelRebootPolling();
     _isRebooting = false;
