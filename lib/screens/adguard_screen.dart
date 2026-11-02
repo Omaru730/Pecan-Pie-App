@@ -14,7 +14,7 @@ class AdGuardScreen extends StatefulWidget {
 }
 
 class _AdGuardScreenState extends State<AdGuardScreen> {
-  // TEMPORARY: hardcoded for testing. A later stage moves these into
+  // *TEMPORARY: hardcoded for testing. A later stage moves these into
   // secure storage so they're not in the source code.
   final _service = AdGuardService(
     host: '192.168.1.1',
