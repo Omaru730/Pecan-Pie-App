@@ -9,6 +9,7 @@ import 'package:luci_mobile/models/glinet_data.dart';
 import 'package:luci_mobile/models/router.dart' as model;
 import 'package:luci_mobile/utils/wifi_utils.dart';
 import 'package:luci_mobile/l10n/luci_localizations.dart';
+import 'adguard_screen.dart';
 
 class DashboardScreen extends ConsumerStatefulWidget {
   const DashboardScreen({super.key});
@@ -1655,6 +1656,21 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
     );
   }
 
+   Widget _buildAdGuardCard() {
+     return Card(
+       child: ListTile(
+         leading: Icon(Icons.shield, color: Theme.of(context).colorScheme.primary),
+         title: const Text('Ad Blocking'),
+         subtitle: const Text('AdGuard Home stats and controls'),
+         trailing: const Icon(Icons.chevron_right),
+         onTap: () => Navigator.push(
+           context,
+           MaterialPageRoute(builder: (_) => const AdGuardScreen()),
+         ),
+       ),
+     );
+   }
+
   Widget _buildBody(AppState appState) {
     if (appState.dashboardError != null) {
       return LuciErrorDisplay(
@@ -1692,6 +1708,8 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
             final landscapeContent = [
               const SizedBox(height: 16),
               _buildDeviceInfoCard(appState),
+              const SizedBox(height: 12),
+              _buildAdGuardCard(),
               const SizedBox(height: 12),
               SizedBox(
                 height: 240,
@@ -1733,6 +1751,8 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                       children: [
                         const SizedBox(height: 4),
                         _buildDeviceInfoCard(appState),
+                        const SizedBox(height: 4),
+                        _buildAdGuardCard(),
                         const SizedBox(height: 4),
                         Expanded(child: _buildRealtimeThroughputCard(appState)),
                         const SizedBox(height: 4),
