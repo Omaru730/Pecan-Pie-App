@@ -1353,6 +1353,31 @@ class AppState extends ChangeNotifier {
     _throughputService?.clear();
   }
 
+  /// Public helper so services (like OpenVPN) can make a LuCI RPC call
+  /// using the current login session.
+  Future<dynamic> callRouter(
+    String object,
+    String method, [
+    Map<String, dynamic>? params,
+  ]) async {
+    if (_reviewerModeEnabled) {
+      return _apiService!.callSimple(object, method, params ?? {});
+    }
+
+    if (_authService?.sysauth == null || _authService?.ipAddress == null) {
+      throw Exception('Not logged in to a router');
+    }
+
+    return _apiService!.call(
+      _authService!.ipAddress!,
+      _authService!.sysauth!,
+      _authService!.useHttps,
+      object: object,
+      method: method,
+      params: params,
+    );
+  }
+
   Future<bool> reboot({BuildContext? context}) async {
     if (!_reviewerModeEnabled && _canReboot != true) return false;
     if (_authService?.sysauth == null || _authService?.ipAddress == null) {
