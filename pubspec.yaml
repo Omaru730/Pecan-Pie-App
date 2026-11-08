@@ -80,7 +80,7 @@ flutter:
 flutter_launcher_icons:
   android: true
   ios: true
-  image_path: "assets/images/pecan_pie_logo.png"
+  image_path: "assets/icon/black_app_icon.png"
   remove_alpha_ios: true
   background_color_ios: "#000000"
   adaptive_icon_background: "#000000"
@@ -90,9 +90,9 @@ flutter_launcher_icons:
 
 flutter_native_splash:
      color: "#000000"
-     image: assets/images/pecan_pie_logo.png
+     image: assets/icon/black_app_icon.png
      android_12:
        color: "#000000"
-       image: assets/icon/black_pecan_pie_app_icon_foreground.png
+       image: assets/icon/splash_android12.png
 
 
