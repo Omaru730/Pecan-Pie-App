@@ -87,7 +87,7 @@ class _OpenVpnImportScreenState extends ConsumerState<OpenVpnImportScreen> {
       return;
     }
     if (!OpenVpnService.validName.hasMatch(name)) {
-      setState(() => _error = 'Name can only use letters, numbers, _ and -.');
+      setState(() => _error = 'Name can only use letters, numbers, and _.');
       return;
     }
 
@@ -144,7 +144,7 @@ class _OpenVpnImportScreenState extends ConsumerState<OpenVpnImportScreen> {
             decoration: const InputDecoration(
               border: OutlineInputBorder(),
               hintText: 'e.g. proton_us',
-              helperText: 'Letters, numbers, _ and - only',
+              helperText: 'Letters, numbers, and _ only',
             ),
           ),
           const SizedBox(height: 24),

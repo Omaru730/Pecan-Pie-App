@@ -2,7 +2,7 @@
     <uses-permission android:name="android.permission.INTERNET"/>
     <application
         android:enableOnBackInvokedCallback="true"
-        android:label="LuCI Mobile"
+        android:label="Pecan Pie"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher">
